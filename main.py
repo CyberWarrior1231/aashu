@@ -48,7 +48,7 @@ async def start_health_server():
         return
 
     port = int(os.environ.get("PORT", 10000))
-   web_app = web.Application()
+    web_app = web.Application()
 
     async def home(_):
         return web.Response(text="✅ Bot is running on Render!")
@@ -476,7 +476,7 @@ def get_subscription_chat_id():
     
 async def check_subscription(client, user_id):
     """Check if user has joined the channel"""
-channel_id = get_subscription_chat_id()
+    channel_id = get_subscription_chat_id()
     try:
         member = await client.get_chat_member(channel_id, user_id)
         return member.status in {
