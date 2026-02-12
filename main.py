@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import re
 import aiohttp
@@ -14,7 +15,7 @@ from typing import Dict, List, Optional
 import logging
 from config import *  # Import configuration
 from config import ADMIN_ID
-from pyrogram.errors import FloodWait, UserIsBlocked, ChatWriteForbidden, UserNotParticipant
+from pyrogram.errors import FloodWait, UserIsBlocked, ChatWriteForbidden, UserNotParticipant, RPCError
 import urllib.parse # Added for unquote
 from motor.motor_asyncio import AsyncIOMotorClient
 import secrets
@@ -26,12 +27,11 @@ import string
 from urllib.parse import quote
 import time
 from database import init_database, add_user, db
-import threading
-import os
-from flask import Flask
+from aiohttp import web
 
 user_state = {}
-health_app = Flask("render_web")
+health_runner = None
+bot_watchdog_task = None
 
 def safe_send(send_func, *args, **kwargs):
     try:
@@ -40,18 +40,53 @@ def safe_send(send_func, *args, **kwargs):
         print(f"[safe_send error] {e}")
         return None
 
-@health_app.route("/")
-def home():
-    return "✅ Bot is running on Render!"
+async def start_health_server():
+    """Start Render-compatible HTTP server on the main asyncio loop."""
+    global health_runner
 
-def run_flask():
+    if health_runner:
+        return
+
     port = int(os.environ.get("PORT", 10000))
-    health_app.run(host="0.0.0.0", port=port)
+   web_app = web.Application()
 
-def start_health_server():
-    """Start Render health-check web server in background."""
-    thread = threading.Thread(target=run_flask, daemon=True)
-    thread.start()
+    async def home(_):
+        return web.Response(text="✅ Bot is running on Render!")
+
+    web_app.router.add_get("/", home)
+
+    health_runner = web.AppRunner(web_app)
+    await health_runner.setup()
+    site = web.TCPSite(health_runner, host="0.0.0.0", port=port)
+    await site.start()
+    logger.info(f"🌐 Health server listening on 0.0.0.0:{port}")
+
+
+async def stop_health_server():
+    global health_runner
+
+    if health_runner:
+        await health_runner.cleanup()
+        health_runner = None
+
+
+async def monitor_bot_connection():
+    """Keep polling client alive if connection drops silently."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            is_connected = getattr(app, "is_connected", False)
+            if callable(is_connected):
+                is_connected = is_connected()
+
+            if not is_connected:
+                logger.warning("⚠️ Pyrogram disconnected, trying to restart client")
+                await app.stop()
+                await asyncio.sleep(2)
+                await app.start()
+                logger.info("✅ Pyrogram client restarted")
+        except Exception as e:
+            logger.error(f"Bot watchdog error: {e}")
 
 # Store file ID mappings
 file_id_map = {}
@@ -430,10 +465,20 @@ async def send_test_to_user(client, message, html_content: str, test_name: str, 
 # Initialize bot instance
 bot_instance = TestSeriesBot()
 
+def get_subscription_chat_id():
+    """Return channel id/username in a format accepted by Pyrogram."""
+    channel = str(CHANNEL_ID).strip()
+    if channel.startswith("@"):
+        return channel
+    if channel.lstrip("-").isdigit():
+        return int(channel)
+    return channel
+    
 async def check_subscription(client, user_id):
     """Check if user has joined the channel"""
+channel_id = get_subscription_chat_id()
     try:
-        member = await client.get_chat_member(CHANNEL_ID, user_id)
+        member = await client.get_chat_member(channel_id, user_id)
         return member.status in {
             ChatMemberStatus.MEMBER,
             ChatMemberStatus.RESTRICTED,
@@ -445,11 +490,14 @@ async def check_subscription(client, user_id):
     except Exception as e:
         logger.error(f"Subscription check error for {user_id}: {e}")
         return False
-
+    except RPCError as e:
+        logger.error(f"Subscription RPC error for {user_id} in {channel_id} in {channel_id}: {e}")
+        return False
 def get_force_sub_buttons():
     """Get force subscribe buttons"""
+    channel = str(CHANNEL_ID).strip().replace('@', '')
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
+       [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{channel}")],
         [InlineKeyboardButton("🔄 Refresh", callback_data="check_sub")]
     ])
 
@@ -2282,19 +2330,26 @@ if __name__ == "__main__":
     print("Bot is ready to process test series from educational websites!")
 
     async def run_bot():
-        start_health_server()
+        global bot_watchdog_task
 
+        await start_health_server()
         db_ok = await init_database()
         if not db_ok:
             logger.warning("Database init failed; bot will continue and retry through runtime operations.")
 
         await app.start()
         logger.info("✅ Bot started in polling mode")
+        bot_watchdog_task = asyncio.create_task(monitor_bot_connection())
         try:
             await idle()
         finally:
+            if bot_watchdog_task:
+                bot_watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bot_watchdog_task
             await bot_instance.close_session()
             await app.stop()
+            await stop_health_server()
             logger.info("🛑 Bot stopped")
 
     try:
