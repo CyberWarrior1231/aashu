@@ -3,7 +3,8 @@ import json
 import re
 import aiohttp
 import aiofiles
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
+from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from bs4 import BeautifulSoup
 import os
@@ -13,7 +14,7 @@ from typing import Dict, List, Optional
 import logging
 from config import *  # Import configuration
 from config import ADMIN_ID
-from pyrogram.errors import FloodWait, UserIsBlocked, ChatWriteForbidden
+from pyrogram.errors import FloodWait, UserIsBlocked, ChatWriteForbidden, UserNotParticipant
 import urllib.parse # Added for unquote
 from motor.motor_asyncio import AsyncIOMotorClient
 import secrets
@@ -30,7 +31,7 @@ import os
 from flask import Flask
 
 user_state = {}
-app = Flask("render_web")
+health_app = Flask("render_web")
 
 def safe_send(send_func, *args, **kwargs):
     try:
@@ -39,16 +40,18 @@ def safe_send(send_func, *args, **kwargs):
         print(f"[safe_send error] {e}")
         return None
 
-@app.route("/")
+@health_app.route("/")
 def home():
     return "✅ Bot is running on Render!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    health_app.run(host="0.0.0.0", port=port)
 
-# 🚀 Flask ko background me start karna zaroori hai
-threading.Thread(target=run_flask).start()
+def start_health_server():
+    """Start Render health-check web server in background."""
+    thread = threading.Thread(target=run_flask, daemon=True)
+    thread.start()
 
 # Store file ID mappings
 file_id_map = {}
@@ -431,8 +434,15 @@ async def check_subscription(client, user_id):
     """Check if user has joined the channel"""
     try:
         member = await client.get_chat_member(CHANNEL_ID, user_id)
-        return member.status not in ("left", "kicked")
-    except Exception:
+         return member.status in {
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER,
+        }
+    except UserNotParticipant:
+        return False
+    except Exception as e:
+        logger.error(f"Subscription check error for {user_id}: {e}")
         return False
 
 def get_force_sub_buttons():
@@ -441,6 +451,20 @@ def get_force_sub_buttons():
         [InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
         [InlineKeyboardButton("🔄 Refresh", callback_data="check_sub")]
     ])
+
+
+@app.on_callback_query(filters.regex("^check_sub$"))
+async def check_sub_callback(client, callback_query):
+    """Handle force-sub refresh button."""
+    user_id = callback_query.from_user.id
+
+    if await check_subscription(client, user_id):
+        reply_markup = await get_welcome_buttons(user_id)
+        await callback_query.message.edit_text(WELCOME_MSG, reply_markup=reply_markup)
+        await callback_query.answer("✅ Subscription verified!")
+        return
+
+    await callback_query.answer("❌ अभी चैनल जॉइन नहीं किया है।", show_alert=True)
 
 WELCOME_MSG = """🎯 **ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴛʜᴇ ᴛᴇꜱᴛ ꜱᴇʀɪᴇꜱ ʙᴏᴛ!**
 
@@ -2096,6 +2120,11 @@ async def send_test_details(client, message, test_data, processing_msg):
 @app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     try:
+        if not await check_subscription(client, message.from_user.id):
+            await message.reply(FORCE_SUB_MSG, reply_markup=get_force_sub_buttons())
+            return
+
+        # Get referral code from /start command
         # Get referral code from /start command
         ref_code = message.text.split()[1] if len(message.text.split()) > 1 else None
 
@@ -2250,28 +2279,27 @@ async def start_command(client, message):
 if __name__ == "__main__":
     print("🚀 Starting Advanced Test Series Bot...")
     print("Bot is ready to process test series from educational websites!")
-    
+
+    async def run_bot():
+        start_health_server()
+
+        db_ok = await init_database()
+        if not db_ok:
+            logger.warning("Database init failed; bot will continue and retry through runtime operations.")
+
+        await app.start()
+        logger.info("✅ Bot started in polling mode")
+       try:
+            await idle()
+        finally:
+            await bot_instance.close_session()
+            await app.stop()
+            logger.info("🛑 Bot stopped")
+
     try:
-        app.run()
+        asyncio.run(run_bot())
     except KeyboardInterrupt:
         print("\n👋 Bot stopped by user")
     except Exception as e:
-        print(f"❌ Bot stopped due to error: {e}")
-    finally:
-        # Cleanup
-        try:
-            asyncio.run(bot_instance.close_session())
-        except Exception as e:
-            print(f"Error during final cleanup: {e}")
+        logger.exception(f"❌ Bot stopped due to error: {e}")
 
-
-from pyrogram import Client, idle
-import asyncio
-
-async def main():
-    bot = Client("my_bot")
-    await bot.start()
-    print("Bot started ✅")
-    await idle()
-
-asyncio.run(main())
