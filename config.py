@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Bot Configuration
-API_ID = os.environ.get("API_ID", "28674463")
-API_HASH = os.environ.get("API_HASH", "04e625b25822b3a0f4730a98adedeba2")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8328688592:AAEw0rJzDz_A4o5CL76UQue1DmV0xJ6u4WY")
+API_ID = os.environ.get("API_ID", "28585138")
+API_HASH = os.environ.get("API_HASH", "74b7afde7d9a546db3451cf4689f4e14")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8301987825:AAGVbI_iDQVoKB36EASRuIv4nxRwRhCnjnk")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@Theprimevault01")
 LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL", "-1003488998176"))
 
@@ -54,6 +54,7 @@ FORCE_SUB_MSG = """
 AFTER JOINING /start AGAIN
 
 """ 
+
 
 
 
