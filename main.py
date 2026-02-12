@@ -434,8 +434,9 @@ async def check_subscription(client, user_id):
     """Check if user has joined the channel"""
     try:
         member = await client.get_chat_member(CHANNEL_ID, user_id)
-         return member.status in {
+        return member.status in {
             ChatMemberStatus.MEMBER,
+            ChatMemberStatus.RESTRICTED,
             ChatMemberStatus.ADMINISTRATOR,
             ChatMemberStatus.OWNER,
         }
@@ -2289,7 +2290,7 @@ if __name__ == "__main__":
 
         await app.start()
         logger.info("✅ Bot started in polling mode")
-       try:
+        try:
             await idle()
         finally:
             await bot_instance.close_session()
@@ -2302,4 +2303,3 @@ if __name__ == "__main__":
         print("\n👋 Bot stopped by user")
     except Exception as e:
         logger.exception(f"❌ Bot stopped due to error: {e}")
-
